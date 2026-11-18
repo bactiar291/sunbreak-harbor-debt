@@ -1,124 +1,13 @@
-// The game's rules and state, with no drawing and no browser in it: the player's paddle, the
-// pool of falling blocks and coins, spawning, collisions, score, lives and level. step() advances
-// one fixed step and returns what happened as bit flags, so the caller can react without the
-// world knowing about screens or sound. Nothing here allocates after createWorld returns.
-import { BLOCK, COIN, FIELD, LEVEL, LIVES, PLAYER, POOL_SIZE } from './config.js';
-
-export const KIND_BLOCK = 0;
-export const KIND_COIN = 1;
-
-export const EVENT_HIT = 1;
-export const EVENT_COIN = 2;
-export const EVENT_OVER = 4;
-
-function overlaps(a, b) {
-  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+import {W,H,COLORS,TAU} from './config.js';import {rng,pick} from './random.js';
+const roadsX=[300,700,1100,1500,1900,2300],roadsY=[250,650,1050,1450];
+export function makeWorld(seed=17){const r=rng(seed),buildings=[],cars=[],people=[],props=[];for(let yi=0;yi<roadsY.length-1;yi++)for(let xi=0;xi<roadsX.length-1;xi++){const x=roadsX[xi]+38,y=roadsY[yi]+38,w=roadsX[xi+1]-roadsX[xi]-76,h=roadsY[yi+1]-roadsY[yi]-76;let count=2+Math.floor(r()*3);for(let n=0;n<count;n++){const bw=Math.min(125+ r()*80,(w-20)/2),bh=Math.min(110+r()*80,(h-20)/2),bx=x+(n%2)*(w/2)+r()*18,by=y+Math.floor(n/2)*(h/2)+r()*18;buildings.push({x:bx,y:by,w:bw,h:bh,color:pick(r,['#a95f47','#c18f57','#54766d','#45616a','#d4bd8c','#745c4c']),height:25+r()*55,sign:pick(r,['MOTEL','PALMA','MARINA','MARKET','SUN','TIDES'])})}}for(let i=0;i<40;i++){const vertical=r()<.5,road=vertical?pick(r,roadsX):pick(r,roadsY);cars.push({x:vertical?road+(r()-.5)*25:r()*W,y:vertical?r()*H:road+(r()-.5)*25,a:vertical?Math.PI/2:0,speed:45+r()*35,color:pick(r,['#d65542','#e4c56e','#568c88','#d5d8cd','#6c7790','#252d32']),police:false,owned:false,driver:true})}for(let i=0;i<64;i++)people.push({x:r()*W,y:r()*H,a:r()*TAU,speed:17+r()*10,shirt:pick(r,['#f2b95e','#c36b54','#d7dbce','#72a895','#8ba6b2'])});return{player:{x:365,y:335,a:0,hp:100,cash:450,ammo:36,vehicle:null,heat:0},buildings,cars,people,bullets:[],particles:[],mission:0,missionStage:0,complete:[false,false],paused:false,clock:0,toast:'',toastTime:0,seed}}
+export function district(x,y){if(x>1700&&y>900)return'PELICAN MARSH';if(x<700&&y>1000)return'OLD QUARTER';if(y<600)return'GLASS TIDE';if(x>1500)return'VEGA MARKET';return'PALM GARDENS'}
+function clamp(p){p.x=Math.max(35,Math.min(W-35,p.x));p.y=Math.max(35,Math.min(H-35,p.y))}
+function blocked(w,x,y){return w.buildings.some(b=>x>b.x-15&&x<b.x+b.w+15&&y>b.y-15&&y<b.y+b.h+15)}
+export function stepWorld(w,dt,input){const p=w.player;w.clock+=dt;if(w.toastTime>0)w.toastTime-=dt;const moving=!!p.vehicle;const car=p.vehicle;if(moving){const throttle=(input.held('w')?1:0)-(input.held('s')?1:0);car.speed=Math.max(-90,Math.min(265,car.speed+throttle*180*dt));car.speed*=Math.pow(input.held(' ')?0.84:0.988,dt*60);car.a+=((input.held('a')?-1:0)+(input.held('d')?1:0))*dt*(.8+Math.abs(car.speed)/130);car.x+=Math.cos(car.a)*car.speed*dt;car.y+=Math.sin(car.a)*car.speed*dt;clamp(car);p.x=car.x;p.y=car.y}else{let dx=(input.held('d')?1:0)-(input.held('a')?1:0),dy=(input.held('s')?1:0)-(input.held('w')?1:0),m=Math.hypot(dx,dy)||1;dx/=m;dy/=m;const speed=input.held('shift')?235:160,nx=p.x+dx*speed*dt,ny=p.y+dy*speed*dt;if(!blocked(w,nx,p.y))p.x=nx;if(!blocked(w,p.x,ny))p.y=ny;if(dx||dy)p.a=Math.atan2(dy,dx)}
+for(const c of w.cars){if(c===car)continue;if(c.police){const d=Math.hypot(p.x-c.x,p.y-c.y);if(p.heat>0&&d<470){const target=Math.atan2(p.y-c.y,p.x-c.x);c.a+=Math.atan2(Math.sin(target-c.a),Math.cos(target-c.a))*dt*1.8;c.speed=120+25*p.heat;if(d<32&&Math.random()<dt*.15){p.hp=Math.max(0,p.hp-5);w.toast='POLICE IMPACT';w.toastTime=1}}}else if(!c.owned)c.x+=Math.cos(c.a)*c.speed*dt;if(c.x<0)c.x=W;if(c.x>W)c.x=0;if(c.y<0)c.y=H;if(c.y>H)c.y=0}
+for(const n of w.people){if(Math.random()<dt*.7)n.a+=(Math.random()-.5)*2;n.x+=Math.cos(n.a)*n.speed*dt;n.y+=Math.sin(n.a)*n.speed*dt;if(blocked(w,n.x,n.y)){n.a+=Math.PI*.7}clamp(n)}for(const b of w.bullets){b.x+=Math.cos(b.a)*b.speed*dt;b.y+=Math.sin(b.a)*b.speed*dt;b.life-=dt}w.bullets=w.bullets.filter(b=>b.life>0&&b.x>0&&b.y>0&&b.x<W&&b.y<H);for(const e of w.particles){e.x+=e.vx*dt;e.y+=e.vy*dt;e.life-=dt}w.particles=w.particles.filter(e=>e.life>0);
+if(p.heat>0){p.heat=Math.max(0,p.heat-dt*.008);if(p.heat>.15&&!w.cars.some(c=>c.police)){const c={x:p.x+650,y:p.y+420,a:Math.PI,speed:140,color:'#dfeee6',police:true,owned:false};w.cars.push(c)}}if(p.hp<=0){p.hp=100;p.cash=Math.max(0,p.cash-200);p.x=365;p.y=335;p.vehicle=null;p.heat=0;w.cars=w.cars.filter(c=>!c.police);w.toast='YOU GOT AWAY. $200 HOSPITAL FEE';w.toastTime=3}
 }
-
-export function createWorld(random) {
-  const player = { x: 0, y: FIELD.groundY - PLAYER.height, width: PLAYER.width, height: PLAYER.height, invulnerable: 0 };
-  const items = [];
-  for (let index = 0; index < POOL_SIZE; index += 1) {
-    items.push({ active: false, kind: KIND_BLOCK, x: 0, y: 0, width: 0, height: 0, speed: 0 });
-  }
-  const state = { player, items, score: 0, lives: LIVES, level: 1, elapsed: 0, blockTimer: 0, coinTimer: 0 };
-
-  function reset() {
-    player.x = (FIELD.width - player.width) / 2;
-    player.invulnerable = 0;
-    for (const item of items) item.active = false;
-    state.score = 0;
-    state.lives = LIVES;
-    state.level = 1;
-    state.elapsed = 0;
-    state.blockTimer = BLOCK.interval;
-    state.coinTimer = COIN.interval;
-  }
-
-  function freeItem() {
-    for (let index = 0; index < items.length; index += 1) if (!items[index].active) return items[index];
-    return null;
-  }
-
-  function spawnBlock() {
-    const item = freeItem();
-    if (item === null) return;
-    item.active = true;
-    item.kind = KIND_BLOCK;
-    item.width = BLOCK.minWidth + random() * (BLOCK.maxWidth - BLOCK.minWidth);
-    item.height = BLOCK.height;
-    item.x = random() * (FIELD.width - item.width);
-    item.y = -item.height;
-    item.speed = BLOCK.speed + BLOCK.speedPerLevel * (state.level - 1) + random() * BLOCK.speedJitter;
-  }
-
-  function spawnCoin() {
-    const item = freeItem();
-    if (item === null) return;
-    item.active = true;
-    item.kind = KIND_COIN;
-    item.width = COIN.size;
-    item.height = COIN.size;
-    item.x = random() * (FIELD.width - item.width);
-    item.y = -item.height;
-    item.speed = COIN.speed + COIN.speedPerLevel * (state.level - 1);
-  }
-
-  function blockInterval() {
-    return Math.max(BLOCK.minInterval, BLOCK.interval * BLOCK.intervalScale ** (state.level - 1));
-  }
-
-  /**
-   * One fixed step. `direction` is -1, 0 or 1 (left, still, right). With `harmless` set (the title
-   * screen's backdrop) things fall but nothing touches the player and nothing scores.
-   */
-  function step(dt, direction, harmless) {
-    let events = 0;
-    state.elapsed += dt;
-    state.level = Math.min(LEVEL.max, 1 + Math.floor(state.elapsed / LEVEL.seconds));
-
-    player.x = Math.min(FIELD.width - player.width, Math.max(0, player.x + direction * PLAYER.speed * dt));
-    if (player.invulnerable > 0) player.invulnerable = Math.max(0, player.invulnerable - dt);
-
-    state.blockTimer -= dt;
-    if (state.blockTimer <= 0) {
-      spawnBlock();
-      state.blockTimer += blockInterval();
-    }
-    state.coinTimer -= dt;
-    if (state.coinTimer <= 0) {
-      spawnCoin();
-      state.coinTimer += COIN.interval + random() * COIN.intervalJitter;
-    }
-
-    for (let index = 0; index < items.length; index += 1) {
-      const item = items[index];
-      if (!item.active) continue;
-      item.y += item.speed * dt;
-      if (item.y > FIELD.groundY) {
-        item.active = false;
-        if (item.kind === KIND_BLOCK && !harmless) state.score += BLOCK.dodgePoints;
-        continue;
-      }
-      if (harmless || !overlaps(item, player)) continue;
-      if (item.kind === KIND_COIN) {
-        item.active = false;
-        state.score += COIN.points;
-        events |= EVENT_COIN;
-      } else if (player.invulnerable === 0) {
-        item.active = false;
-        state.lives -= 1;
-        player.invulnerable = PLAYER.invulnerable;
-        events |= EVENT_HIT;
-        if (state.lives === 0) {
-          events |= EVENT_OVER;
-          break;
-        }
-      }
-    }
-    return events;
-  }
-
-  reset();
-  return { state, reset, step };
-}
+export function nearest(w){const p=w.player;let best=null,dist=1e9;for(const c of w.cars){const d=Math.hypot(p.x-c.x,p.y-c.y);if(d<dist){best=c;dist=d}}return dist<70?{type:'car',obj:best,d}:null}
+export {blocked,roadsX,roadsY};
