@@ -2,7 +2,8 @@ import {readdirSync,readFileSync,statSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {join} from 'node:path';
 import assert from 'node:assert/strict';
-const root='/tmp/gta6-clean-repo';
+import {fileURLToPath} from 'node:url';
+const root=fileURLToPath(new URL('..',import.meta.url));
 let count=0;
 for(const folder of ['game/src','tests'])for(const file of readdirSync(join(root,folder))){
  if(!/\.(m?js)$/.test(file))continue;

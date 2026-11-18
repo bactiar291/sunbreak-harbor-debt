@@ -1,17 +1,21 @@
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 import {writeFileSync,mkdirSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
 const require=createRequire(import.meta.url);
-const {chromium}=require('/root/camofox-browser/node_modules/playwright-core');
-const review='/tmp/gta6-build-20261118/review';
+const {chromium}=require(process.env.PLAYWRIGHT_CORE_PATH||'playwright-core');
+const review=process.env.REVIEW_DIR;
+if(!review)throw Error('Set REVIEW_DIR to a directory outside the repository');
+const baseURL=process.env.GAME_URL||'http://127.0.0.1:8097/';
+const screenshots=new URL('../screenshots/',import.meta.url);
 mkdirSync(review,{recursive:true});
-const browser=await chromium.launch({executablePath:'/root/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome',headless:true,args:['--no-sandbox']});
+const browser=await chromium.launch({executablePath:process.env.CHROME_PATH,headless:true,args:['--no-sandbox']});
 const page=await browser.newPage({viewport:{width:1280,height:720}});
 const errors=[],checks=[];
 page.on('pageerror',e=>errors.push(e.message));
 page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
 page.on('requestfailed',r=>errors.push(r.url()+': '+r.failure()?.errorText));
-page.on('request',r=>{if(!r.url().startsWith('http://127.0.0.1:8097/')&&!r.url().startsWith('data:'))errors.push('external '+r.url());});
+page.on('request',r=>{if(!r.url().startsWith(baseURL)&&!r.url().startsWith('data:'))errors.push('external '+r.url());});
 const snap=()=>page.evaluate(()=>window.sunbreak.snapshot());
 const wait=ms=>page.waitForTimeout(ms);
 async function key(k,ms=70){await page.keyboard.down(k);await wait(ms);await page.keyboard.up(k);await wait(45);}
@@ -33,11 +37,24 @@ async function walk(x,y){
   } finally {if(active)await page.keyboard.up(active);await page.keyboard.up('Shift');}
 }
 async function capture(name){
-  const s=await snap();assert.ok(!s.dead&&s.player.hp>0);assert.equal(s.mode,'play');
-  await page.screenshot({path:`/tmp/gta6-clean-repo/screenshots/${name}.jpg`,type:'jpeg',quality:78});
+  const before=await snap();validateCapture(before,name);
+  await page.screenshot({path:fileURLToPath(new URL(name+'.jpg',screenshots)),type:'jpeg',quality:82});
+  const after=await snap();validateCapture(after,name);
+  assert.ok(after.tick>=before.tick);
+  writeFileSync(`${review}/${name}-capture.json`,JSON.stringify({quality:82,viewport:page.viewportSize(),before,after},null,2));
+}
+function validateCapture(s,name){
+  assert.ok(!s.dead&&s.player.hp>0&&!s.paused);assert.equal(s.mode,'play');
+  if(name==='1-chase'){
+    assert.ok(s.player.vehicle&&s.player.heat>0);
+    assert.ok(s.cars.some(c=>c.police&&!c.disabled&&c.x-s.camera.x>30&&c.x-s.camera.x<1250&&c.y-s.camera.y>150&&c.y-s.camera.y<620),'live patrol visible');
+  }
+  if(name==='2-on-foot-action')assert.equal(s.player.vehicle,null);
+  if(name==='3-driving-city'){assert.equal(s.player.vehicle,'syndicate');assert.equal(s.mission,1);}
+  if(name==='4-complete'){assert.equal(s.mission,2);assert.equal(s.player.cash,2300);}
 }
 try{
-  await page.goto('http://127.0.0.1:8097/');await page.waitForFunction(()=>window.sunbreak);
+  await page.goto(baseURL);await page.waitForFunction(()=>window.sunbreak);
   assert.equal((await snap()).mode,'title');await page.click('#play');const start=await snap();
   await walk(750,650);const walked=await snap();
   pass('normal title and walking',{distance:Math.hypot(walked.player.x-start.player.x,walked.player.y-start.player.y)});
@@ -48,14 +65,15 @@ try{
   pass('save reload selected vehicle',{vehicle:vehicleRestored.player.vehicle,x:vehicleRestored.player.x,y:vehicleRestored.player.y});
   const beforeDrive=await snap();await key('w',1200);await key(' ',500);const driven=await snap();
   assert.ok(driven.player.x-beforeDrive.player.x>80);
-  await capture('3-driving-city');await key('e');assert.equal((await snap()).player.vehicle,null);
-  pass('enter drive exit',{distance:driven.player.x-beforeDrive.player.x});
+
   const copStart=await snap(),cop=copStart.cars.find(c=>c.police);assert.ok(cop);
   const gap0=Math.hypot(cop.x-copStart.player.x,cop.y-copStart.player.y);
   await wait(1000);const chased=await snap(),copNow=chased.cars.find(c=>c.id===cop.id);
   const gap1=Math.hypot(copNow.x-chased.player.x,copNow.y-chased.player.y);
   assert.ok(gap1<gap0-30);pass('police closes gap',{before:gap0,after:gap1});
   await capture('1-chase');
+  await key('e');assert.equal((await snap()).player.vehicle,null);
+  pass('enter drive exit',{distance:driven.player.x-beforeDrive.player.x});
   // Stand and fight the pursuing patrol before continuing the contract.
   for(let i=0;i<8;i++) {
     const s=await snap(),target=s.cars.find(c=>c.police&&!c.disabled);
@@ -78,6 +96,7 @@ try{
   }
   await key('f');assert.equal((await snap()).mission,1);assert.equal((await snap()).player.cash,1100);
   await key('f');assert.equal((await snap()).player.cash,1100);pass('marked coupe contract and reward once',{cash:1100});
+  await capture('3-driving-city');
   await key('e');await walk((await snap()).player.x,650);await walk(1900,650);await walk(1900,820);
   // Aim at the actual guard's screen position as camera smoothing settles.
   await wait(300);
