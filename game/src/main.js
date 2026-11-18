@@ -1,1 +1,75 @@
-import {STEP,SAVE_KEY,W,H} from './config.js';import {makeWorld,stepWorld,nearest} from './world.js';import {createRenderer} from './render.js';import {createInput} from './input.js';const params=new URLSearchParams(location.search),shot=params.get('shot'),seed=Number(params.get('seed')||17);let world=makeWorld(seed),input=createInput(document.getElementById('game')),draw=createRenderer(document.getElementById('game')),menu=document.getElementById('menu'),mode='title',last=performance.now(),acc=0,fireCooldown=0;function msg(t,n=2){world.toast=t;world.toastTime=n}function save(){try{localStorage.setItem(SAVE_KEY,JSON.stringify({player:{...world.player,vehicle:null},mission:world.mission,missionStage:world.missionStage,complete:world.complete,seed:world.seed}));msg('CITY PROGRESS SAVED')}catch{msg('SAVE UNAVAILABLE')}}function load(){try{const s=JSON.parse(localStorage.getItem(SAVE_KEY));if(!s)return false;world=makeWorld(s.seed);Object.assign(world.player,s.player);world.mission=s.mission;world.missionStage=s.missionStage;world.complete=s.complete;world.player.vehicle=null;return true}catch{return false}}function start(){mode='play';menu.style.display='none';msg('WELCOME TO SUNBREAK',3)}document.getElementById('play').onclick=start;document.getElementById('load').onclick=()=>{if(load()){start();msg('SAVE RESTORED')}else msg('NO SAVED CITY')};function toggleCar(){const p=world.player;if(p.vehicle){p.vehicle.owned=true;p.vehicle=null;msg('ON FOOT');return}const n=nearest(world);if(n){p.vehicle=n.obj;n.obj.owned=true;n.obj.speed=0;p.heat=Math.min(5,p.heat+.85);msg(n.obj.police?'PATROL VEHICLE TAKEN · WANTED':'VEHICLE STOLEN · WANTED',3)}}function interact(){const p=world.player;if(world.mission===0&&Math.hypot(p.x-1275,p.y-790)<190){if(world.missionStage===0){world.missionStage=1;msg('MARA: TAKE THEIR CAR. THEN WE TALK.',4)}else if(p.vehicle){p.cash+=650;world.mission=1;world.complete[0]=true;world.missionStage=0;msg('CONTRACT COMPLETE · +$650',4)}else msg('MARA: BRING A SYNDICATE CAR.',2)}else if(world.mission===1&&Math.hypot(p.x-2045,p.y-1220)<180){world.complete[1]=true;world.mission=2;p.cash+=1400;p.heat=0;world.cars=world.cars.filter(c=>!c.police);msg('LEDGER SECURED · +$1,400 · STORY COMPLETE',5)}else msg('OBJECTIVE MARKED ON YOUR MAP',2)}function shoot(){const p=world.player;if(p.vehicle||!p.ammo)return;const r=document.getElementById('game').getBoundingClientRect(),camX=Math.max(0,Math.min(W-innerWidth,p.x-innerWidth/2)),camY=Math.max(0,Math.min(H-innerHeight,p.y-innerHeight/2)),m=input.mouse(),a=Math.atan2(camY+m.y-r.top-p.y,camX+m.x-r.left-p.x);p.a=a;p.ammo--;world.bullets.push({x:p.x+Math.cos(a)*15,y:p.y+Math.sin(a)*15,a,speed:620,life:1});p.heat=Math.min(5,p.heat+1.25)}function actions(){if(input.tap('escape')){if(mode==='play'){mode='pause';world.paused=true}else if(mode==='pause'){mode='play';world.paused=false}}if(mode!=='play')return;if(input.tap('e'))toggleCar();if(input.tap('f'))interact();if(input.tap('k'))save();if(input.tap('l')&&load())msg('SAVE RESTORED');if(input.tap('r')){world.player.ammo=36;msg('RELOADED',1)}}function update(dt){stepWorld(world,dt,input);fireCooldown-=dt;if(input.mouse().down&&fireCooldown<=0){shoot();fireCooldown=.18}for(const b of world.bullets)for(const c of world.cars)if(c.police&&Math.hypot(b.x-c.x,b.y-c.y)<20){c.speed=0;b.life=0;msg('PATROL DISABLED · KEEP MOVING',2)}}function stage(){if(shot==='start')return;mode='play';menu.style.display='none';if(shot==='mission'){world.player.x=1275;world.player.y=790;world.missionStage=1;world.player.vehicle=world.cars.find(c=>!c.police);world.player.vehicle.x=1275;world.player.vehicle.y=790;world.player.vehicle.owned=true}if(shot==='play'){world.player.x=720;world.player.y=610;world.player.heat=2.2;world.missionStage=1;const c=world.cars.find(x=>!x.police);c.x=775;c.y=630;world.player.vehicle=c;c.owned=true;c.speed=110;for(let i=0;i<3;i++)world.cars.push({x:460-i*120,y:430-i*70,a:.3,speed:130,color:'#e4e9df',police:true,owned:false})}if(shot==='end'){world.player.x=2045;world.player.y=1220;world.mission=2;world.complete=[true,true];world.player.cash=2500;world.toast='LEDGER SECURED · STORY COMPLETE';world.toastTime=99}}function frame(now){requestAnimationFrame(frame);const dt=Math.min(.25,(now-last)/1000);last=now;actions();if(mode==='title'&&shot){stage();window.__shotReady=true}if(mode==='play'){acc+=dt;let n=0;while(acc>=STEP&&n++<15){update(STEP);acc-=STEP}}draw(world,input);if(mode==='pause')document.getElementById('prompt').textContent='PAUSED · Press ESC TO RESUME'}requestAnimationFrame(frame);
+import {STEP,SAVE_KEY} from './config.js';
+import {makeWorld,stepWorld,toggleCar,message} from './world.js';
+import {interact,objective} from './missions.js';
+import {fire,reload} from './combat.js';
+import {encodeSave,decodeSave} from './save.js';
+import {createRenderer} from './render.js';
+import {createInput} from './input.js';
+import {createAudio} from './audio.js';
+
+const canvas=document.getElementById('game'),menu=document.getElementById('menu');
+const input=createInput(canvas),draw=createRenderer(canvas),audio=createAudio();
+let world=makeWorld(17),mode='title',last=performance.now(),acc=0;
+const frameTimes=[];
+function savedWorld() { try{return decodeSave(localStorage.getItem(SAVE_KEY));}catch{return null;} }
+function refreshLoad() {
+  const exists=!!savedWorld();
+  document.getElementById('load').disabled=!exists;
+  document.getElementById('load').textContent=exists?'Continue saved game':'No valid saved city';
+}
+function start(fresh=true) {
+  if(fresh) world=makeWorld(17);
+  mode='play';world.paused=false;menu.hidden=true;input.reset();acc=0;audio.unlock();
+}
+document.getElementById('play').onclick=()=>start();
+document.getElementById('load').onclick=()=>{const saved=savedWorld();if(saved){world=saved;start(false);message(world,'SAVE RESTORED');}};
+refreshLoad();
+function save() {
+  try {localStorage.setItem(SAVE_KEY,encodeSave(world));message(world,'CITY PROGRESS SAVED');}
+  catch {message(world,'SAVE UNAVAILABLE');}
+}
+function load() {
+  const saved=savedWorld();
+  if(saved){world=saved;input.reset();message(world,'SAVE RESTORED');}
+  else message(world,'NO VALID SAVED CITY');
+}
+function controls() {
+  if(mode!=='play') {input.clear();return;}
+  if(world.dead) {if(input.tap('enter')) start();input.clear();return;}
+  if(input.tap('escape')) {world.paused=!world.paused;input.reset();}
+  if(world.paused) {input.clear();return;}
+  if(input.tap('e')) toggleCar(world);
+  if(input.tap('f')) interact(world);
+  if(input.tap('r')) reload(world);
+  if(input.tap('k')) save();
+  if(input.tap('l')) load();
+  if(input.tap('m')) message(world,audio.toggle()?'AUDIO MUTED':'AUDIO ON');
+  if(input.mouse().down) {
+    const mouse=input.mouse(),camera=draw.camera;
+    fire(world,Math.atan2(mouse.y+camera.y-world.player.y,mouse.x+camera.x-world.player.x));
+  }
+  input.clear();
+}
+// Inspection only: callers receive a detached snapshot, never the live world.
+Object.defineProperty(window,'sunbreak',{value:Object.freeze({snapshot:()=>JSON.parse(JSON.stringify({
+  mode,tick:world.tick,clock:world.clock,paused:world.paused,dead:world.dead,seed:world.seed,
+  player:{...world.player,vehicle:world.player.vehicle?.id??null},cars:world.cars,guards:world.guards,
+  mission:world.mission,missionStage:world.missionStage,complete:world.complete,events:world.events,
+  objective:objective(world),escapeTime:world.escapeTime,camera:draw.camera,
+  performance:{frames:frameTimes.length,meanMs:frameTimes.reduce((a,b)=>a+b,0)/(frameTimes.length||1)}
+}))}),writable:false,configurable:false});
+let lastSoundTick=-1;
+function frame(now) {
+  const elapsed=Math.min((now-last)/1000,.1);last=now;
+  frameTimes.push(elapsed*1000);if(frameTimes.length>300)frameTimes.shift();
+  controls();
+  if(mode==='play'&&!world.paused&&!world.dead) {
+    acc+=elapsed;
+    while(acc>=STEP){stepWorld(world,STEP,input);acc-=STEP;}
+  } else acc=0;
+  for(const e of world.events) if(e.tick>lastSoundTick&&['shot','impact','reward'].includes(e.type)) audio.play(e.type);
+  lastSoundTick=world.tick;
+  draw(world,input);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
